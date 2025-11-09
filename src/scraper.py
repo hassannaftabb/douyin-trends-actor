@@ -99,7 +99,7 @@ class DouyinScraper:
             )
             warm_page = await context.new_page()
             Actor.log.info("[douyin] Visiting homepage to refresh cookies...")
-            await warm_page.goto("https://www.douyin.com", wait_until="domcontentloaded")
+            await warm_page.goto("https://www.douyin.com", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
             cookies = await context.cookies()
             Actor.log.info(f"[douyin] Got {len(cookies)} cookies (session ready).")
