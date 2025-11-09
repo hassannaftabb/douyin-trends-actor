@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
 class InputModel(BaseModel):
-    max_hashtags: int = Field(default=10, ge=1, le=50, description="How many trending hashtags to fetch")
+    max_hashtags: int = Field(default=3, ge=1, le=50, description="How many trending hashtags to fetch")
     max_posts_per_hashtag: int = Field(default=10, ge=1, le=50, description="How many posts to scrape per hashtag")
     max_pages: int = Field(default=3, ge=1, le=10, description="How many pages per hashtag to scrape")
     concurrency: int = Field(default=5, ge=1, le=20, description="Concurrent scraping threads")

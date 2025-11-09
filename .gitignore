@@ -162,3 +162,4 @@ cython_debug/
 #  Ignores the folder created when setting Project Settings in the Zed editor. Can be commented out
 #  to share Project Settings within a team
 .zed
+dump

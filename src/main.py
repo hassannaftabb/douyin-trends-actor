@@ -16,11 +16,11 @@ async def main():
         cfg = InputModel(**input_data)
 
         Actor.log.info("Starting Douyin Trending Video Scraper")
-        Actor.log.info(f"Max keywords: {getattr(cfg, 'max_hashtags', 10)}")
+        Actor.log.info(f"Max keywords: {getattr(cfg, 'max_hashtags', 3)}")
         Actor.log.info(f"Max videos per keyword: {getattr(cfg, 'max_posts_per_hashtag', 10)}")
 
         Actor.log.info("Fetching trending keywords from Douyin hot list…")
-        trending_keywords = await fetch_hot_hashtags(limit=getattr(cfg, 'max_hashtags', 10))
+        trending_keywords = await fetch_hot_hashtags(limit=getattr(cfg, 'max_hashtags', 3))
 
         Actor.log.info(f"Found {len(trending_keywords)} trending topics.")
         for i, kw in enumerate(trending_keywords, start=1):
@@ -34,7 +34,11 @@ async def main():
             rank = keyword_info["rank"]
 
             Actor.log.info(f"Scraping videos for '{keyword}' (rank {rank})")
-            scraper = DouyinScraper(keyword)
+            scraper = DouyinScraper(
+    keyword,
+    limit=getattr(cfg, "max_posts_per_hashtag", 10)
+)
+
 
             raw_data = await scraper.fetch_json()
             if not raw_data:
@@ -42,7 +46,7 @@ async def main():
                 continue
 
             structured = await scraper.extract_posts(raw_data)
-            videos = structured.videos[: getattr(cfg, "max_posts_per_hashtag", 10)]
+            videos = structured.videos
             Actor.log.info(f"Collected {len(videos)} structured videos for '{keyword}'")
 
             total_likes = sum(v.likes or 0 for v in videos)

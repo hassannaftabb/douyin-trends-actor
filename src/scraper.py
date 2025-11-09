@@ -1,100 +1,170 @@
-import json
-import aiohttp
+# scraper.py — DouyinScraper based on Playwright interception (no precomputed URLs)
+
 import asyncio
-from typing import Optional, Any
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+import json
+import re
+import time
+from typing import Any, List
 from apify import Actor
-from .auth import get_douyin_auth
+from playwright.async_api import async_playwright
 from .models import DouyinResponseModel
 from .utils import parse_douyin_video
 
 
 class DouyinScraper:
-    """Lightweight Douyin search scraper that supports pagination and structured extraction."""
+    """Headless Playwright scraper for Douyin search capturing /stream/ + /single/ requests dynamically."""
 
-    BASE_URL = (
-        "https://www.douyin.com/aweme/v1/web/general/search/single/"
-        "?device_platform=webapp&aid=6383&channel=channel_pc_web&search_channel=aweme_general"
-        "&enable_history=1&search_source=normal_search&query_correct_type=1&is_filter_search=0"
-        "&from_group_id=&disable_rs=1&need_filter_settings=0&list_type=single"
-        "&update_version_code=170400&pc_client_type=1&pc_libra_divert=Windows&support_h265=1"
-        "&support_dash=1&cpu_core_num=24&version_code=190600&version_name=19.6.0"
-        "&cookie_enabled=true&screen_width=1920&screen_height=1080"
-        "&browser_language=en-PK&browser_platform=Win32&browser_name=Chrome"
-        "&browser_version=142.0.0.0&browser_online=true&engine_name=Blink"
-        "&engine_version=142.0.0.0&os_name=Windows&os_version=10"
-        "&device_memory=8&platform=PC&downlink=10&effective_type=4g&round_trip_time=100"
-    )
+    TARGET_API_PREFIXES = [
+        "https://www.douyin.com/aweme/v1/web/general/search/stream/",
+        "https://www.douyin.com/aweme/v1/web/general/search/single/",
+    ]
 
-    def __init__(self, keyword: str, limit: int = 30, count_per_page: int = 10):
+    def __init__(self, keyword: str, limit: int = 25):
         self.keyword = keyword
         self.limit = limit
-        self.count = count_per_page
-        creds = get_douyin_auth()
-        self.headers = creds["headers"]
-        self.cookies = creds["cookies"]
+        self.collected_chunks: List[dict] = []
+        self.videos_flat: List[dict] = []
+        self.last_request_time = time.time()
+        self.stop_event = asyncio.Event()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(3),
-        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
-    )
-    async def _fetch_page(self, session, offset: int) -> Optional[Any]:
-        """Fetch a single Douyin JSON page based on offset."""
-        url = f"{self.BASE_URL}&keyword={self.keyword}&offset={offset}&count={self.count}"
-        Actor.log.info(f"[douyin] Fetching offset={offset} ...")
+    @staticmethod
+    def clean_chunked_body(raw_bytes: bytes) -> str:
+        text = raw_bytes.decode("utf-8", errors="ignore")
+        text = re.sub(r"(?m)^[0-9a-fA-F]+\r\n", "", text)
+        return text.strip("\x00\r\n\t ")
 
-        async with session.get(url, headers=self.headers, cookies=self.cookies) as resp:
-            Actor.log.info(
-                f"Status {resp.status} | Content-Type: {resp.headers.get('Content-Type')}"
+    @staticmethod
+    def extract_json_chunks(raw_text: str) -> List[Any]:
+        """Extract multiple JSON objects from a chunked /stream/ body."""
+        potential_objs = re.findall(r"(\{.*?\})(?=\s*\{|\s*$)", raw_text, re.DOTALL)
+        parsed = []
+        for chunk in potential_objs:
+            try:
+                obj = json.loads(chunk)
+                if not (len(obj) == 1 and "ack" in obj):
+                    parsed.append(obj)
+            except Exception:
+                continue
+        return parsed
+
+    @staticmethod
+    def extract_videos_from_obj(obj: Any) -> List[Any]:
+        """Extract aweme_info objects from either /stream/ or /single/ response JSON."""
+        videos = []
+        data = None
+        if isinstance(obj, dict):
+            if "data" in obj and isinstance(obj["data"], list):
+                data = obj["data"]
+            elif "aweme_list" in obj and isinstance(obj["aweme_list"], list):
+                data = obj["aweme_list"]
+
+        if not data:
+            return videos
+
+        for item in data:
+            aweme = None
+            if isinstance(item, dict):
+                if "aweme_info" in item:
+                    aweme = item["aweme_info"]
+                elif "desc" in item and "aweme_id" in item:
+                    aweme = item
+            if aweme:
+                videos.append(aweme)
+        return videos
+
+    async def fetch_json(self) -> dict:
+        """Launch browser, intercept API calls, and return all collected Douyin videos."""
+        Actor.log.info(f"[douyin] Launching Playwright browser for keyword={self.keyword}")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, args=["--disable-blink-features=AutomationControlled"]
             )
-            if resp.status != 200:
-                Actor.log.warning(f"[douyin] Non-200 response at offset {offset}")
-                return None
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+                locale="zh-CN",
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
 
-            if "application/json" not in resp.headers.get("Content-Type", ""):
-                Actor.log.warning(f"[douyin] Non-JSON response at offset {offset}")
-                return None
+            async def on_response(response):
+                nonlocal browser
+                url = response.url
+                if not any(url.startswith(p) for p in self.TARGET_API_PREFIXES):
+                    return
 
-            return await resp.json(content_type=None)
+                self.last_request_time = time.time()
+                Actor.log.info(f"[douyin] Captured API: {url}")
 
-    async def fetch_json(self) -> Optional[Any]:
-        """Fetch multiple pages up to the specified limit."""
-        timeout = aiohttp.ClientTimeout(total=30)
-        all_data = []
-        offset = 0
-        fetched = 0
+                try:
+                    raw = await response.body()
+                    text = self.clean_chunked_body(raw)
+                    chunks = self.extract_json_chunks(text)
 
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            while fetched < self.limit:
-                data = await self._fetch_page(session, offset)
-                if not data:
+                    if not chunks:
+                        try:
+                            chunks = [json.loads(text)]
+                        except Exception:
+                            Actor.log.warning("[douyin] Non-JSON response.")
+                            return
+
+                    for chunk in chunks:
+                        new_videos = self.extract_videos_from_obj(chunk)
+                        if new_videos:
+                            self.videos_flat.extend(new_videos)
+                            Actor.log.info(
+                                f"[douyin] Added {len(new_videos)} videos (total {len(self.videos_flat)})"
+                            )
+                            if len(self.videos_flat) >= self.limit:
+                                self.stop_event.set()
+                                return
+                        self.collected_chunks.append(chunk)
+                except Exception as e:
+                    Actor.log.warning(f"[douyin] Failed decoding response: {e}")
+
+            page.on("response", on_response)
+
+            url = f"https://www.douyin.com/search/{self.keyword}"
+            Actor.log.info(f"[douyin] Navigating to {url}")
+            await page.goto(url, wait_until="domcontentloaded")
+
+            try:
+                await page.wait_for_selector(
+                    "div[data-e2e='search_general_container']", timeout=15000
+                )
+                Actor.log.info("[douyin] Search results DOM loaded.")
+            except Exception:
+                Actor.log.warning("[douyin] Search container not found.")
+
+            idle_time_limit = 20
+            scroll_pause = 2.5
+            scroll_round = 0
+
+            Actor.log.info("[douyin] Starting scroll-based pagination capture...")
+            while not self.stop_event.is_set():
+                await page.mouse.wheel(0, 800)
+                scroll_round += 1
+                Actor.log.info(f"[douyin] Scrolled round #{scroll_round}")
+                await asyncio.sleep(scroll_pause)
+
+                if time.time() - self.last_request_time > idle_time_limit:
+                    Actor.log.info("[douyin] No new API calls for 20s — stopping.")
                     break
 
-                raw_data = data.get("data", [])
-                page_items = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
-                if not page_items:
-                    break
+            Actor.log.info(f"[douyin] Done. {len(self.videos_flat)} videos collected.")
+            await browser.close()
 
-                all_data.extend(page_items)
-                fetched += len(page_items)
-                offset += self.count
-
-                await asyncio.sleep(1.5)
-
-        Actor.log.info(f"[douyin] ✅ Collected total {len(all_data)} items across pages.")
-        return {"data": all_data}
+        return {"data": self.videos_flat}
 
     async def extract_posts(self, data) -> DouyinResponseModel:
-        """Convert raw JSON data into structured Pydantic models."""
+        """Convert the collected data into structured DouyinResponseModel."""
         raw_data = data.get("data", [])
-        aweme_list = raw_data.get("data", []) if isinstance(raw_data, dict) else raw_data
-
         videos = []
-        for item in aweme_list:
-            aweme = item.get("aweme_info") if isinstance(item, dict) else None
-            if not aweme:
-                continue
+        for aweme in raw_data:
             parsed = parse_douyin_video(aweme)
             if parsed:
                 videos.append(parsed)

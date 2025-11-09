@@ -6,3 +6,4 @@ tenacity
 fake-useragent
 beautifulsoup4
 playwright-stealth
+brotli
