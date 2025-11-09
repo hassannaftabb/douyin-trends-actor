@@ -9,7 +9,6 @@ from playwright.async_api import async_playwright
 from .models import DouyinResponseModel
 from .utils import parse_douyin_video
 
-
 class DouyinScraper:
     """Headless Playwright scraper for Douyin search capturing /stream/ + /single/ requests dynamically."""
 
@@ -79,7 +78,7 @@ class DouyinScraper:
         proxy_configuration = await Actor.create_proxy_configuration(
             groups=['RESIDENTIAL'],
             country_code='CN',
-            password='apify_api_MiKZBZ9lF6XSnGXaIw2FyU5pdXlav80y8cId'
+            password='apify_proxy_EDG4daFXU5eFhHqlBtfQQjgZsTyq0J0jNCYr'
         )
         proxy_url = await proxy_configuration.new_url()
         Actor.log.info(f"[douyin] Using proxy: {proxy_url}")
