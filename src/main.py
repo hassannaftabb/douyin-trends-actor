@@ -136,7 +136,6 @@ async def main():
 
                 await asyncio.sleep(3 + (rank % 3))
 
-            # 🔁 Retry failed keywords once
             if failed_keywords:
                 Actor.log.info(f"[retry] Retrying {len(failed_keywords)} failed keywords after short delay...")
                 await asyncio.sleep(30)
