@@ -76,11 +76,18 @@ class DouyinScraper:
     async def fetch_json(self) -> dict:
         """Launch browser, intercept API calls, and return all collected Douyin videos."""
         Actor.log.info(f"[douyin] Launching Playwright browser for keyword={self.keyword}")
-
+        proxy_configuration = await Actor.create_proxy_configuration(
+            groups=['RESIDENTIAL'],
+            country_code='CN',
+            password='apify_api_MiKZBZ9lF6XSnGXaIw2FyU5pdXlav80y8cId'
+        )
+        proxy_url = await proxy_configuration.new_url()
+        Actor.log.info(f"[douyin] Using proxy: {proxy_url}")
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled"],
+                proxy={"server": proxy_url},
             )
             context = await browser.new_context(
                 user_agent=(
