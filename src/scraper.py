@@ -1,15 +1,14 @@
-# scraper.py — DouyinScraper based on Playwright interception (no precomputed URLs)
-
 import asyncio
 import json
 import re
 import time
+import gzip
 from typing import Any, List
 from apify import Actor
 from playwright.async_api import async_playwright
 from .models import DouyinResponseModel
 from .utils import parse_douyin_video
-Actor.log.setLevel("DEBUG")
+
 
 class DouyinScraper:
     """Headless Playwright scraper for Douyin search capturing /stream/ + /single/ requests dynamically."""
@@ -29,13 +28,15 @@ class DouyinScraper:
 
     @staticmethod
     def clean_chunked_body(raw_bytes: bytes) -> str:
+        """Remove HTTP chunked encoding markers and clean up."""
         text = raw_bytes.decode("utf-8", errors="ignore")
-        text = re.sub(r"(?m)^[0-9a-fA-F]+\r\n", "", text)
-        return text.strip("\x00\r\n\t ")
+        text = re.sub(r"(?mi)^[0-9a-f]+\r?\n", "", text)
+        text = text.replace("\r", "").replace("\n", "")
+        return text.strip("\x00\t ")
 
     @staticmethod
     def extract_json_chunks(raw_text: str) -> List[Any]:
-        """Extract multiple JSON objects from a chunked /stream/ body."""
+        """Extract multiple JSON objects from chunked /stream/ body."""
         potential_objs = re.findall(r"(\{.*?\})(?=\s*\{|\s*$)", raw_text, re.DOTALL)
         parsed = []
         for chunk in potential_objs:
@@ -78,7 +79,8 @@ class DouyinScraper:
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=True, args=["--disable-blink-features=AutomationControlled"]
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
             )
             context = await browser.new_context(
                 user_agent=(
@@ -89,10 +91,17 @@ class DouyinScraper:
                 locale="zh-CN",
                 viewport={"width": 1280, "height": 800},
             )
+            warm_page = await context.new_page()
+            Actor.log.info("[douyin] Visiting homepage to refresh cookies...")
+            await warm_page.goto("https://www.douyin.com", wait_until="domcontentloaded")
+            await asyncio.sleep(5)
+            cookies = await context.cookies()
+            Actor.log.info(f"[douyin] Got {len(cookies)} cookies (session ready).")
+            await warm_page.close()
+
             page = await context.new_page()
 
             async def on_response(response):
-                nonlocal browser
                 url = response.url
                 if not any(url.startswith(p) for p in self.TARGET_API_PREFIXES):
                     return
@@ -102,19 +111,28 @@ class DouyinScraper:
 
                 try:
                     raw = await response.body()
-                    Actor.log.info(f"[douyin] RAW BYTES (len={len(raw)}): {raw[:200]!r}")
-                    text = self.clean_chunked_body(raw)
-                    Actor.log.info(f"[douyin] Raw stream body (first 500 chars): {text[:500]}")
-                    chunks = self.extract_json_chunks(text)
+                    if raw[:2] == b"\x1f\x8b":
+                        raw = gzip.decompress(raw)
 
+                    text = self.clean_chunked_body(raw)
+                    chunks = self.extract_json_chunks(text)
                     if not chunks:
                         try:
                             chunks = [json.loads(text)]
                         except Exception:
-                            Actor.log.warning("[douyin] Non-JSON response.")
+                            Actor.log.warning("[douyin] Non-JSON or empty response.")
                             return
 
                     for chunk in chunks:
+                        if (
+                            isinstance(chunk, dict)
+                            and chunk.get("search_nil_info", {}).get("search_nil_type")
+                            == "web_need_login"
+                        ):
+                            Actor.log.warning("[douyin] Douyin returned web_need_login — session blocked.")
+                            self.stop_event.set()
+                            return
+
                         new_videos = self.extract_videos_from_obj(chunk)
                         if new_videos:
                             self.videos_flat.extend(new_videos)
@@ -135,9 +153,7 @@ class DouyinScraper:
             await page.goto(url, wait_until="domcontentloaded")
 
             try:
-                await page.wait_for_selector(
-                    "div[data-e2e='search_general_container']", timeout=15000
-                )
+                await page.wait_for_selector("div[data-e2e='search_general_container']", timeout=15000)
                 Actor.log.info("[douyin] Search results DOM loaded.")
             except Exception:
                 Actor.log.warning("[douyin] Search container not found.")
