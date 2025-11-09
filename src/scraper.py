@@ -9,7 +9,7 @@ from apify import Actor
 from playwright.async_api import async_playwright
 from .models import DouyinResponseModel
 from .utils import parse_douyin_video
-
+Actor.log.setLevel("DEBUG")
 
 class DouyinScraper:
     """Headless Playwright scraper for Douyin search capturing /stream/ + /single/ requests dynamically."""
@@ -102,7 +102,9 @@ class DouyinScraper:
 
                 try:
                     raw = await response.body()
+                    Actor.log.info(f"[douyin] RAW BYTES (len={len(raw)}): {raw[:200]!r}")
                     text = self.clean_chunked_body(raw)
+                    Actor.log.info(f"[douyin] Raw stream body (first 500 chars): {text[:500]}")
                     chunks = self.extract_json_chunks(text)
 
                     if not chunks:
