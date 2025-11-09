@@ -77,7 +77,6 @@ class DouyinScraper:
         Actor.log.info(f"[douyin] Launching Playwright browser for keyword={self.keyword}")
         proxy_configuration = await Actor.create_proxy_configuration(
             groups=['RESIDENTIAL'],
-            country_code='CN',
             password='apify_proxy_EDG4daFXU5eFhHqlBtfQQjgZsTyq0J0jNCYr'
         )
         proxy_url = await proxy_configuration.new_url()
