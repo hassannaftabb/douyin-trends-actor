@@ -1,0 +1,10 @@
+{
+  "actorSpecification": 1,
+  "name": "douyin-trends-actor",
+  "title": "Douyin Trending Videos & Hashtags Actor",
+  "description": "Scrapes trending hashtags and their top videos from Douyin (TikTok China), including metadata, engagement metrics, authors, and hashtags for trend analysis.",
+  "version": "1.0.0",
+  "buildTag": "latest",
+  "readme": "../README.md",
+  "dockerfile": "../Dockerfile"
+}

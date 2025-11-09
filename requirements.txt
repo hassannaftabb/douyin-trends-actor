@@ -1,0 +1,8 @@
+apify
+aiohttp
+playwright
+pydantic
+tenacity
+fake-useragent
+beautifulsoup4
+playwright-stealth
